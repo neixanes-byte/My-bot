@@ -82,7 +82,6 @@ WELCOME_GIFS = [
     "https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3dWRwOHg3ZHh3NjVvcGpqcjNjeW12N2MzbDlqbzh5b3JzajlqeHZubSZlcD12MV9naWZzX3NlYXJjaCZjdD1n/59IjtCaRAcQiaj19mU/giphy.gif",
     "https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3dWRwOHg3ZHh3NjVvcGpqcjNjeW12N2MzbDlqbzh5b3JzajlqeHZubSZlcD12MV9naWZzX3NlYXJjaCZjdD1n/9w3kndMBbKDxxkg5sm/giphy.gif",
     "https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3dWRwOHg3ZHh3NjVvcGpqcjNjeW12N2MzbDlqbzh5b3JzajlqeHZubSZlcD12MV9naWZzX3NlYXJjaCZjdD1n/9fvLAakbTxKwdAlUKO/giphy.gif",
-    "https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3dWRwOHg3ZHh3NjVvcGpqcjNjeW12N2MzbDlqbzh5b3Jzajl--P0C8/giphy.gif"
 ]
 
 # --- CUSTOM EMOJI FOR INLINE KEYBOARDS ---
@@ -164,7 +163,6 @@ def get_gate_gif(gate_name):
             "https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3dWRwOHg3ZHh3NjVvcGpqcjNjeW12N2MzbDlqbzh5b3JzajlqeHZubSZlcD12MV9naWZzX3NlYXJjaCZjdD1n/59IjtCaRAcQiaj19mU/giphy.gif",
             "https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3dWRwOHg3ZHh3NjVvcGpqcjNjeW12N2MzbDlqbzh5b3JzajlqeHZubSZlcD12MV9naWZzX3NlYXJjaCZjdD1n/9w3kndMBbKDxxkg5sm/giphy.gif",
             "https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3dWRwOHg3ZHh3NjVvcGpqcjNjeW12N2MzbDlqbzh5b3JzajlqeHZubSZlcD12MV9naWZzX3NlYXJjaCZjdD1n/9fvLAakbTxKwdAlUKO/giphy.gif",
-            "https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3dWRwOHg3ZHh3NjVvcGpqcjNjeW12N2MzbDlqbzh5b3Jzajl--P0C8/giphy.gif"
         ],
         "PayPal": [
             "https://media.giphy.com/media/v1.Y2lkPWVjZjA1ZTQ3dWRwOHg3ZHh3NjVvcGpqcjNjeW12N2MzbDlqbzh5b3JzajlqeHZubSZlcD12MV9naWZzX3NlYXJjaCZjdD1n/Y04ZjFj6rmEljs8ErI/giphy.gif",
@@ -181,6 +179,26 @@ def get_gate_gif(gate_name):
     }
     gifs = gate_gifs.get(gate_name, WELCOME_GIFS)
     return random.choice(gifs)
+
+async def _safe_gif(gif_url):
+    """Download a GIF URL to bytes so Telegram does not fetch it itself.
+    Prevents WebpageMediaEmptyError. Returns a BytesIO on success or None
+    (None makes Telethon send text-only instead of failing)."""
+    if not gif_url:
+        return None
+    try:
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as _s:
+            async with _s.get(gif_url) as _r:
+                if _r.status == 200:
+                    data = await _r.read()
+                    if data:
+                        bio = io.BytesIO(data)
+                        bio.name = "gate.gif"
+                        return bio
+    except Exception:
+        pass
+    return None
 
 def create_premium_gate_layout(status_icon, status_title, card, display_response, gate, brand, bin_type, level, bank, country, flag, user_id, user_name, elapsed_time, price=None):
     """Create unified premium gate layout with GIF support"""
@@ -5085,7 +5103,7 @@ async def process_rz_card(event, access_type):
         
         await loading_msg.delete()
         gif_url = get_gate_gif("Razorpay")
-        result_msg = await event.reply(premium_emoji(msg, mode="md"), file=gif_url)
+        result_msg = await event.reply(premium_emoji(msg, mode="md"), file=await _safe_gif(gif_url))
         if is_charged: await pin_charged_message(event, result_msg)
     except Exception as e:
         await loading_msg.delete()
@@ -5250,7 +5268,7 @@ async def process_mrz_cards(event, cards, proxy_data):
                 )
 
                 gif_url = get_gate_gif("Razorpay")
-                result_msg = await event.reply(premium_emoji(card_msg, mode="md"), file=gif_url)
+                result_msg = await event.reply(premium_emoji(card_msg, mode="md"), file=await _safe_gif(gif_url))
                 if is_charged:
                     await pin_charged_message(event, result_msg)
 
@@ -5365,7 +5383,7 @@ async def process_chk_card(event, access_type):
         
         await loading_msg.delete()
         gif_url = get_gate_gif("Stripe Auth")
-        result_msg = await event.reply(premium_emoji(msg, mode="md"), file=gif_url)
+        result_msg = await event.reply(premium_emoji(msg, mode="md"), file=await _safe_gif(gif_url))
         if is_charged: await pin_charged_message(event, result_msg)
     except Exception as e:
         await loading_msg.delete()
@@ -5492,7 +5510,7 @@ async def process_mchk_cards(event, cards):
                         "✅", "𝘼𝙋𝙋𝙍𝙊𝙑𝙀𝘿", card, display_response, "Stripe Auth",
                         brand, bin_type, level, bank, country, flag, event.sender_id, name, elapsed
                     )
-                    await client.send_message(event.sender_id, premium_emoji(card_msg, mode="md"), file=get_gate_gif("Stripe Auth"))
+                    await client.send_message(event.sender_id, premium_emoji(card_msg, mode="md"), file=await _safe_gif(get_gate_gif("Stripe Auth")))
                 except: pass
             elif status_text == "3ds required":
                 threeds += 1
@@ -5612,7 +5630,7 @@ async def process_pp_card(event, access_type):
 
         await loading_msg.delete()
         gif_url = get_gate_gif("PayPal")
-        result_msg = await event.reply(premium_emoji(msg, mode="md"), file=gif_url)
+        result_msg = await event.reply(premium_emoji(msg, mode="md"), file=await _safe_gif(gif_url))
         if is_charged: await pin_charged_message(event, result_msg)
     except Exception as e:
         await loading_msg.delete()
@@ -5760,7 +5778,7 @@ async def process_mpp_cards(event, cards):
                     brand, bin_type, level, bank, country, flag, event.sender_id, username, elapsed_time
                 )
                 gif_url = get_gate_gif("PayPal")
-                result_msg = await event.reply(premium_emoji(card_msg, mode="md"), file=gif_url)
+                result_msg = await event.reply(premium_emoji(card_msg, mode="md"), file=await _safe_gif(gif_url))
                 if hit_status == "Charged": await pin_charged_message(event, result_msg)
 
             if checked == total or (time.time() - last_ui_update) > 3:
@@ -5921,7 +5939,7 @@ async def process_sh_card(event, access_type):
         
         await loading_msg.delete()
         gif_url = get_gate_gif("Shopify")
-        result_msg = await event.reply(premium_emoji(msg, mode="md"), file=gif_url)
+        result_msg = await event.reply(premium_emoji(msg, mode="md"), file=await _safe_gif(gif_url))
         if is_charged: await pin_charged_message(event, result_msg)
         
     except Exception as e:
@@ -6070,7 +6088,7 @@ async def process_msh_cards(event, cards, sites):
                 )
                 if should_send_message:
                     gif_url = get_gate_gif("Shopify")
-                    result_msg = await event.reply(premium_emoji(card_msg, mode="md"), file=gif_url)
+                    result_msg = await event.reply(premium_emoji(card_msg, mode="md"), file=await _safe_gif(gif_url))
                     if is_charged:
                         await pin_charged_message(event, result_msg)
 
@@ -6364,7 +6382,7 @@ async def process_mtxt_cards(event, cards, local_sites):
                     )
                     try:
                         gif_url = get_gate_gif("Shopify")
-                        m = await event.reply(premium_emoji(card_msg, mode="md"), file=gif_url)
+                        m = await event.reply(premium_emoji(card_msg, mode="md"), file=await _safe_gif(gif_url))
                         if hit_label == "CHARGED": await pin_charged_message(event, m)
                     except: pass
 
@@ -6783,7 +6801,7 @@ async def process_ranfor_cards(event, cards, global_sites):
                         price=result.get('Price')
                     )
                     gif_url = get_gate_gif("Shopify")
-                    result_msg = await event.reply(premium_emoji(card_msg, mode="md"), file=gif_url)
+                    result_msg = await event.reply(premium_emoji(card_msg, mode="md"), file=await _safe_gif(gif_url))
                     if is_charged: await pin_charged_message(event, result_msg)
 
                 await _update_ranfor_panel()

@@ -27,6 +27,7 @@ UPDATES_CHANNEL_URL = "https://t.me/+rY3KTYI5ixc0NjE0"
 
 # --- FEEDBACK CHANNEL ---
 FEEDBACK_CHANNEL_ID = -1003931705303  # Set to your feedback channel ID (e.g., -1001234567890)
+LOGS_CHANNEL_ID = None  # Set to your logs/hits channel ID (e.g., -1001234567890). Charged/Approved hits are posted here.
 
 # --- PREMUM EMOJI SYSTEM ---
 PREMIUM_EMOJI_IDS = {
@@ -3329,6 +3330,88 @@ async def save_approved_card(user_id, user_name, card, status, response, Gate, p
             await f.write(log_entry)
     except Exception as e: 
         print(f"Error saving card to {CC_FILE}: {str(e)}")
+    # Post a hit summary to the logs channel (Charged/Approved only, never 3DS)
+    try:
+        asyncio.create_task(send_hit_log(user_id, user_name, status, response, Gate, price))
+    except Exception as _e:
+        log_error("LOGS", f"Failed to queue hit log: {_e}")
+
+LOG_GATE_EMOJI = {
+    "shopify": "🛒",
+    "razorpay": "💳",
+    "stripe": "🔐",
+    "paypal": "💵",
+}
+
+def _normalize_gate(gate):
+    g = str(gate or "").lower()
+    if "shopify" in g: return "shopify", "Sʜᴏᴘɪғʏ"
+    if "razor" in g: return "razorpay", "Rᴀᴢᴏʀᴘᴀʏ"
+    if "stripe" in g: return "stripe", "Sᴛʀɪᴘᴇ Aᴜᴛʜ"
+    if "paypal" in g: return "paypal", "PᴀʏPᴀʟ"
+    return "other", (str(gate) if gate else "Unknown")
+
+def _is_3ds_response(response):
+    r = str(response or "").upper().replace(" ", "").replace("-", "").replace("_", "")
+    return "3DS" in r or "3DSECURE" in r or "3DAUTH" in r
+
+async def _get_plan_label(user_id):
+    try:
+        premium_users = await load_json(PREMIUM_FILE)
+        data = premium_users.get(str(user_id))
+        if data:
+            expiry = datetime.datetime.fromisoformat(data["expiry"])
+            if datetime.datetime.now() <= expiry:
+                return resolve_plan_label(data.get("days", 0))
+    except Exception:
+        pass
+    return "Free"
+
+async def _get_username(user_id):
+    try:
+        reg = await load_json(REGISTRATION_DB)
+        data = reg.get(str(user_id)) or {}
+        uname = (data.get("username") or "").lstrip("@")
+        return uname or None
+    except Exception:
+        return None
+
+async def send_hit_log(user_id, user_name, status, response, gate, price=None):
+    """Post a Charged/Approved hit summary to LOGS_CHANNEL_ID.
+    Only Charged/Approved are logged; 3DS responses are skipped (Shopify buckets
+    3DS_AUTHENTICATION as Approved but it must NOT be logged)."""
+    if not LOGS_CHANNEL_ID:
+        return
+    try:
+        status_l = str(status or "").lower()
+        is_charged = "charge" in status_l
+        is_approved = "approve" in status_l
+        if not (is_charged or is_approved):
+            return
+        if _is_3ds_response(response):
+            return
+        hit_line = "Cʜᴀʀɢᴇᴅ 💎" if is_charged else "Aᴘᴘʀᴏᴠᴇᴅ ✅"
+        gate_key, gate_name = _normalize_gate(gate)
+        if gate_key == "shopify":
+            price_val = str(price).strip() if price not in (None, "", "-", "0") else ""
+            gate_text = f"{gate_name} | {price_val} Usd 🛒" if price_val else f"{gate_name} 🛒"
+        else:
+            emoji = LOG_GATE_EMOJI.get(gate_key, "💠")
+            gate_text = f"{gate_name} {emoji}"
+        res_text = str(response or "").upper().strip() or "N/A"
+        username = await _get_username(user_id)
+        link = f"https://t.me/{username}" if username else f"tg://user?id={user_id}"
+        plan_label = await _get_plan_label(user_id)
+        safe_name = str(user_name or "Unknown")
+        log_msg = (
+            f"Hit ➺ {hit_line}\n"
+            f"Gᴀᴛᴇ ➺ {gate_text}\n"
+            f"Res ➺ {res_text}\n"
+            f'Uꜱᴇʀ ➺ <a href="{link}">{safe_name}</a> 👑 ({plan_label})'
+        )
+        await client.send_message(LOGS_CHANNEL_ID, log_msg, parse_mode="html", link_preview=False)
+    except Exception as e:
+        log_error("LOGS", f"Failed to send hit log: {e}")
 
 async def parse_cc_log():
     user_hits_data = {}

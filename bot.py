@@ -555,6 +555,8 @@ CC_FILE = "cc.txt"
 BANNED_FILE = "banned_users.json"
 PROXY_FILE = "proxy.json"
 REGISTRATION_DB = "registration_db.json"
+AUTHORIZED_GROUPS_FILE = "authorized_groups.json"  # groups allowed to use the bot
+AUTHORIZED_GROUPS = set()  # in-memory set of authorized group ids (marked/-100 form)
 MAX_RETRY_ATTEMPTS = 5
 BUG_SITE_CHARGE_THRESHOLD = 3
 BOT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -588,7 +590,7 @@ async def create_json_file(filename):
         print(f"Error creating {filename}: {str(e)}")
 
 async def initialize_files():
-    for file in [PREMIUM_FILE, FREE_FILE, SITE_FILE, KEYS_FILE, BANNED_FILE, PROXY_FILE, ADMIN_FILE, REGISTRATION_DB]:
+    for file in [PREMIUM_FILE, FREE_FILE, SITE_FILE, KEYS_FILE, BANNED_FILE, PROXY_FILE, ADMIN_FILE, REGISTRATION_DB, AUTHORIZED_GROUPS_FILE]:
         await create_json_file(file)
 
 def get_json_lock(filename):
@@ -3265,6 +3267,47 @@ def extract_all_cards(text):
         if card: cards.add(card)
     return list(cards)
 
+def normalize_chat_id(chat_or_id):
+    """Return the marked (-100...) peer id for a chat/entity or raw id."""
+    try:
+        from telethon import utils as _tlutils
+        return _tlutils.get_peer_id(chat_or_id)
+    except Exception:
+        try:
+            return int(getattr(chat_or_id, 'id', chat_or_id))
+        except Exception:
+            return chat_or_id
+
+async def load_authorized_groups():
+    global AUTHORIZED_GROUPS
+    data = await load_json(AUTHORIZED_GROUPS_FILE)
+    ids = data.get("group_ids", []) if isinstance(data, dict) else []
+    AUTHORIZED_GROUPS = set(int(g) for g in ids)
+    return AUTHORIZED_GROUPS
+
+async def save_authorized_groups():
+    await save_json(AUTHORIZED_GROUPS_FILE, {"group_ids": sorted(AUTHORIZED_GROUPS)})
+
+def is_group_authorized(chat_or_id):
+    return normalize_chat_id(chat_or_id) in AUTHORIZED_GROUPS
+
+async def add_authorized_group(chat_or_id):
+    gid = normalize_chat_id(chat_or_id)
+    if gid in AUTHORIZED_GROUPS:
+        return False, gid
+    AUTHORIZED_GROUPS.add(gid)
+    await save_authorized_groups()
+    return True, gid
+
+async def remove_authorized_group(chat_or_id):
+    gid = normalize_chat_id(chat_or_id)
+    if gid not in AUTHORIZED_GROUPS:
+        return False, gid
+    AUTHORIZED_GROUPS.discard(gid)
+    await save_authorized_groups()
+    return True, gid
+
+
 async def can_use(user_id, chat):
     if await is_banned_user(user_id):
         return False, "banned"
@@ -3278,6 +3321,9 @@ async def can_use(user_id, chat):
         else:
             return False, "no_access"
     else:  # In a group
+        # Bot only works in authorized groups (admins/owner bypass)
+        if not is_group_authorized(chat) and user_id not in ADMIN_IDS:
+            return False, "group_unauthorized"
         if is_premium:
             return True, "premium_group"
         else:
@@ -3747,6 +3793,10 @@ async def global_access_guard(event):
     if not event.raw_text or not event.raw_text.startswith(('/', '.')):
         return
     command = event.raw_text.split()[0].lstrip('/.').lower()
+    # --- Group authorization gate: ignore commands in unauthorized groups ---
+    if not event.is_private and command not in {"addgrp", "rmgrp", "grps"}:
+        if not is_admin(event.sender_id) and not is_group_authorized(event.chat_id):
+            raise StopPropagation
     if command in {"key", "auth", "logs", "getcc", "stats", "up", "maintenance", "release"}:
         if not is_owner(event.sender_id):
             raise StopPropagation
@@ -3879,6 +3929,51 @@ async def unpromote_admin_handler(event):
     await save_admin_ids()
     await event.reply(premium_emoji(f"✅ <b>Admin removed.</b>\n\n🆔 <code>{target_id}</code>"), parse_mode='html')
     log_info("SYSTEM", f"OWNER unpromoted admin {target_id}")
+
+@client.on(events.NewMessage(pattern=r'(?i)^[/.]addgrp(?:\s+(-?\d+))?$'))
+async def add_group_handler(event):
+    if not is_admin(event.sender_id):
+        return
+    arg = event.pattern_match.group(1)
+    if arg:
+        target = int(arg)
+    elif not event.is_private:
+        target = event.chat_id
+    else:
+        return await event.reply(premium_emoji("⚠️ <b>Usage:</b> run <code>/addgrp</code> inside the group, or <code>/addgrp -1001234567890</code>"), parse_mode='html')
+    added, gid = await add_authorized_group(target)
+    if added:
+        await event.reply(premium_emoji(f"✅ <b>Group authorized.</b>\n\n🆔 <code>{gid}</code>"), parse_mode='html')
+        log_info("SYSTEM", f"Admin {event.sender_id} authorized group {gid}")
+    else:
+        await event.reply(premium_emoji(f"💎 <b>Group is already authorized.</b>\n\n🆔 <code>{gid}</code>"), parse_mode='html')
+
+@client.on(events.NewMessage(pattern=r'(?i)^[/.]rmgrp(?:\s+(-?\d+))?$'))
+async def remove_group_handler(event):
+    if not is_admin(event.sender_id):
+        return
+    arg = event.pattern_match.group(1)
+    if arg:
+        target = int(arg)
+    elif not event.is_private:
+        target = event.chat_id
+    else:
+        return await event.reply(premium_emoji("⚠️ <b>Usage:</b> run <code>/rmgrp</code> inside the group, or <code>/rmgrp -1001234567890</code>"), parse_mode='html')
+    removed, gid = await remove_authorized_group(target)
+    if removed:
+        await event.reply(premium_emoji(f"✅ <b>Group removed from authorized list.</b>\n\n🆔 <code>{gid}</code>"), parse_mode='html')
+        log_info("SYSTEM", f"Admin {event.sender_id} removed group {gid}")
+    else:
+        await event.reply(premium_emoji(f"❌ <b>Group is not in the authorized list.</b>\n\n🆔 <code>{gid}</code>"), parse_mode='html')
+
+@client.on(events.NewMessage(pattern=r'(?i)^[/.]grps$'))
+async def list_groups_handler(event):
+    if not is_admin(event.sender_id):
+        return
+    if not AUTHORIZED_GROUPS:
+        return await event.reply(premium_emoji("📋 <b>No authorized groups yet.</b>\n\nRun <code>/addgrp</code> inside a group to authorize it."), parse_mode='html')
+    lines = "\n".join(f"• <code>{g}</code>" for g in sorted(AUTHORIZED_GROUPS))
+    await event.reply(premium_emoji(f"📋 <b>Authorized groups ({len(AUTHORIZED_GROUPS)}):</b>\n\n{lines}"), parse_mode='html')
 
 async def run_site_verification(event, owner_id, selected_range):
     sites = TEMP_EXTRACTED.get(owner_id)
@@ -7447,6 +7542,7 @@ async def initialize_bot():
     """Initialize bot files and admin IDs - called from main.py"""
     await initialize_files()
     await load_admin_ids()
+    await load_authorized_groups()
 
     # Create a wrapper for get_cc_limit that can be used by external modules
     def get_cc_limit_wrapper(access_type, user_id=None):
@@ -7502,6 +7598,7 @@ async def main():
     """Main async entry point - runs both Telethon and aiogram concurrently."""
     await initialize_files()
     await load_admin_ids()
+    await load_authorized_groups()
     
     log_info("SYSTEM", "Starting AutoShopify Bot (Dual Framework: Telethon + aiogram)...")
     try:

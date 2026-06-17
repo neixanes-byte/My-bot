@@ -28,6 +28,7 @@ UPDATES_CHANNEL_URL = "https://t.me/+rY3KTYI5ixc0NjE0"
 # --- FEEDBACK CHANNEL ---
 FEEDBACK_CHANNEL_ID = -1003931705303  # Set to your feedback channel ID (e.g., -1001234567890)
 LOGS_CHANNEL_ID = None  # Set to your logs/hits channel ID (e.g., -1001234567890). Charged/Approved hits are posted here.
+LOGS_BOT_URL = "https://t.me/cctanjiroBot"  # Button in the logs channel links here
 
 # --- PREMUM EMOJI SYSTEM ---
 PREMIUM_EMOJI_IDS = {
@@ -3409,7 +3410,21 @@ async def send_hit_log(user_id, user_name, status, response, gate, price=None):
             f"Res ➺ {res_text}\n"
             f'Uꜱᴇʀ ➺ <a href="{link}">{safe_name}</a> 👑 ({plan_label})'
         )
-        await client.send_message(LOGS_CHANNEL_ID, log_msg, parse_mode="html", link_preview=False)
+        markup = {
+            "inline_keyboard": [
+                [
+                    {
+                        "text": "Cʜᴇᴄᴋ Yᴏᴜʀ Cᴀʀᴅs",
+                        "url": LOGS_BOT_URL,
+                        "icon_custom_emoji_id": CUSTOM_EMOJI["PRIMARY"],
+                        "style": "primary"
+                    }
+                ]
+            ]
+        }
+        keyboard = build_custom_keyboard(markup)
+        text = premium_emoji(log_msg) if "<tg-emoji" not in log_msg else log_msg
+        await aiogram_bot.send_message(LOGS_CHANNEL_ID, text, reply_markup=keyboard, parse_mode="HTML")
     except Exception as e:
         log_error("LOGS", f"Failed to send hit log: {e}")
 

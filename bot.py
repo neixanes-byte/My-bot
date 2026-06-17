@@ -3363,7 +3363,7 @@ async def _get_plan_label(user_id):
         if data:
             expiry = datetime.datetime.fromisoformat(data["expiry"])
             if datetime.datetime.now() <= expiry:
-                return resolve_plan_label(data.get("days", 0))
+                return resolve_plan_label(data.get("days", 0)).replace(" PLAN", "")
     except Exception:
         pass
     return "Free"
@@ -3394,21 +3394,21 @@ async def send_hit_log(user_id, user_name, status, response, gate, price=None, r
         hit_line = "Cʜᴀʀɢᴇᴅ 💎" if is_charged else "Aᴘᴘʀᴏᴠᴇᴅ ✅"
         gate_key, gate_name = _normalize_gate(gate)
         if gate_key == "shopify":
-            price_val = str(price).strip() if price not in (None, "", "-", "0") else ""
-            gate_text = f"{gate_name} | {price_val} Usd 🛒" if price_val else f"{gate_name} 🛒"
+            price_val = str(price).strip() if price not in (None, "", "-", "0") else "0"
+            formatted_price = price_val if price_val.startswith("$") else f"${price_val}"
+            gate_text = f"Shopify {formatted_price} 💵"
         else:
             emoji = LOG_GATE_EMOJI.get(gate_key, "💠")
             gate_text = f"{gate_name} {emoji}"
         res_text = str(response or "").upper().strip() or "N/A"
-        username = await _get_username(user_id)
-        link = f"https://t.me/{username}" if username else f"tg://user?id={user_id}"
+        link = f"tg://user?id={user_id}"
         plan_label = await _get_plan_label(user_id)
         safe_name = str(user_name or "Unknown")
         log_msg = (
-            f"Hit ➺ {hit_line}\n"
-            f"Gᴀᴛᴇ ➺ {gate_text}\n"
-            f"Res ➺ {res_text}\n"
-            f'Uꜱᴇʀ ➺ <a href="{link}">{safe_name}</a> 👑 ({plan_label})'
+            f"<b>Hit ➺ {hit_line}</b>\n"
+            f"<b>Gᴀᴛᴇ ➺ {gate_text}</b>\n"
+            f"<b>Res ➺ {res_text}</b>\n"
+            f'<b>Uꜱᴇʀ ➺ <a href="{link}">{safe_name}</a> 👑 ({plan_label})</b>'
         )
         markup = {
             "inline_keyboard": [
@@ -3791,7 +3791,7 @@ async def test_log_handler(event):
     sender = await event.get_sender()
     name = getattr(sender, "first_name", None) or "Tester"
     try:
-        await send_hit_log(event.sender_id, name, "Charged", "ORDER_PLACED", "Shopify", "0-5", raise_errors=True)
+        await send_hit_log(event.sender_id, name, "Charged", "ORDER_PLACED", "Shopify", "7.29", raise_errors=True)
         await event.reply(premium_emoji("✅ <b>Test hit log sent</b> to the logs channel. Check it now."), parse_mode='html')
     except Exception as e:
         await event.reply(premium_emoji(f"❌ <b>Failed to send test log:</b> <code>{e}</code>\n\nEnsure the bot is an admin in the logs channel and LOGS_CHANNEL_ID is correct."), parse_mode='html')

@@ -27,7 +27,7 @@ UPDATES_CHANNEL_URL = "https://t.me/+rY3KTYI5ixc0NjE0"
 
 # --- FEEDBACK CHANNEL ---
 FEEDBACK_CHANNEL_ID = -1003931705303  # Set to your feedback channel ID (e.g., -1001234567890)
-LOGS_CHANNEL_ID = None  # Set to your logs/hits channel ID (e.g., -1001234567890). Charged/Approved hits are posted here.
+LOGS_CHANNEL_ID = -1003957269794  # Logs/hits channel ID. Charged/Approved hits are posted here.
 LOGS_BOT_URL = "https://t.me/cctanjiroBot"  # Button in the logs channel links here
 
 # --- PREMUM EMOJI SYSTEM ---
@@ -3377,7 +3377,7 @@ async def _get_username(user_id):
     except Exception:
         return None
 
-async def send_hit_log(user_id, user_name, status, response, gate, price=None):
+async def send_hit_log(user_id, user_name, status, response, gate, price=None, raise_errors=False):
     """Post a Charged/Approved hit summary to LOGS_CHANNEL_ID.
     Only Charged/Approved are logged; 3DS responses are skipped (Shopify buckets
     3DS_AUTHENTICATION as Approved but it must NOT be logged)."""
@@ -3427,6 +3427,8 @@ async def send_hit_log(user_id, user_name, status, response, gate, price=None):
         await aiogram_bot.send_message(LOGS_CHANNEL_ID, text, reply_markup=keyboard, parse_mode="HTML")
     except Exception as e:
         log_error("LOGS", f"Failed to send hit log: {e}")
+        if raise_errors:
+            raise
 
 async def parse_cc_log():
     user_hits_data = {}
@@ -3779,6 +3781,20 @@ async def maintenance_handler(event):
     await notify_all_users(text)
     await event.reply(premium_emoji(text), parse_mode='html')
     log_info("SYSTEM", "Maintenance mode enabled by OWNER")
+
+@client.on(events.NewMessage(pattern=r'(?i)^[/.]test$'))
+async def test_log_handler(event):
+    if not is_admin(event.sender_id):
+        return
+    if not LOGS_CHANNEL_ID:
+        return await event.reply(premium_emoji("⚠️ <b>LOGS_CHANNEL_ID is not set.</b> Set it in the config to enable hit logs."), parse_mode='html')
+    sender = await event.get_sender()
+    name = getattr(sender, "first_name", None) or "Tester"
+    try:
+        await send_hit_log(event.sender_id, name, "Charged", "ORDER_PLACED", "Shopify", "0-5", raise_errors=True)
+        await event.reply(premium_emoji("✅ <b>Test hit log sent</b> to the logs channel. Check it now."), parse_mode='html')
+    except Exception as e:
+        await event.reply(premium_emoji(f"❌ <b>Failed to send test log:</b> <code>{e}</code>\n\nEnsure the bot is an admin in the logs channel and LOGS_CHANNEL_ID is correct."), parse_mode='html')
 
 @client.on(events.NewMessage(pattern=r'(?i)^[/.]release(?:\s+(\w+))?$'))
 async def release_handler(event):

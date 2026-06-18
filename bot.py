@@ -3786,6 +3786,86 @@ async def test_single_site(site, test_card="4031630422575208|01|2030|280", user_
 
 # This will now work perfectly!
 client = TelegramClient('cc_bot', API_ID, API_HASH)
+
+
+# ============================================================
+#  GLOBAL FLOODWAIT SAFETY LAYER
+#  Centralized safe request wrapper + global Telethon interceptor.
+#  Added without touching individual handlers: every event.reply /
+#  event.respond / event.edit / message.edit / status_msg.edit /
+#  client.send_message call is automatically routed through
+#  safe_api_call() so a FloodWaitError can never crash a handler
+#  or cascade a second exception out of an error handler.
+# ============================================================
+
+async def safe_api_call(coro, fallback_log_tag="SYSTEM", _max_retries=5, _attempt=0):
+    """
+    Safely run any Telethon request, absorbing FloodWaitError.
+
+    `coro` accepts either:
+      * a zero-arg callable returning a coroutine (preferred -> enables retry)
+            await safe_api_call(lambda: event.reply("hi"), "START")
+      * an already-created coroutine (convenience, single attempt only)
+            await safe_api_call(event.reply("hi"), "START")
+
+    On FloodWaitError: logs the wait, sleeps e.seconds + 2, then retries
+    inline (callable form only). Any other exception is logged and
+    swallowed so parent loops/handlers keep running. Returns the call
+    result, or None on failure.
+    """
+    try:
+        pending = coro() if callable(coro) else coro
+        return await pending
+    except FloodWaitError as e:
+        wait = int(getattr(e, "seconds", 0)) + 2
+        log_error(fallback_log_tag, f"FloodWait hit: waiting {wait}s (Telegram asked {e.seconds}s)")
+        await asyncio.sleep(wait)
+        if callable(coro) and _attempt < _max_retries:
+            return await safe_api_call(coro, fallback_log_tag, _max_retries, _attempt + 1)
+        if not callable(coro):
+            log_error(fallback_log_tag, "FloodWait: raw coroutine cannot be retried (pass a lambda to enable retry).")
+        else:
+            log_error(fallback_log_tag, f"FloodWait: retry limit {_max_retries} reached, giving up.")
+        return None
+    except Exception as e:
+        log_error(fallback_log_tag, f"Safe API call failed: {type(e).__name__}: {e}")
+        return None
+
+
+def _install_floodwait_interceptor():
+    """Route all Telethon message I/O through safe_api_call exactly once."""
+    from telethon.tl.custom.message import Message
+
+    def _wrap(owner, name, tag):
+        original = getattr(owner, name, None)
+        if original is None or getattr(original, "_floodsafe", False):
+            return  # missing or already patched
+        async def patched(self, *args, **kwargs):
+            return await safe_api_call(lambda: original(self, *args, **kwargs), tag)
+        patched._floodsafe = True
+        setattr(owner, name, patched)
+
+    # event.reply / event.respond / event.edit all resolve to Message.* ,
+    # as do status_msg.edit / message.edit (they are Message objects).
+    _wrap(Message, "reply", "TG_REPLY")
+    _wrap(Message, "respond", "TG_RESPOND")
+    _wrap(Message, "edit", "TG_EDIT")
+    _wrap(TelegramClient, "send_message", "TG_SEND")
+
+    # Telethon inline-button (CallbackQuery) events define their own methods;
+    # only patch the ones they actually own (others delegate to Message above).
+    try:
+        from telethon.events import CallbackQuery
+        for _m, _t in (("edit", "CB_EDIT"), ("respond", "CB_RESPOND"), ("answer", "CB_ANSWER")):
+            if _m in CallbackQuery.Event.__dict__:
+                _wrap(CallbackQuery.Event, _m, _t)
+    except Exception as _e:
+        log_error("SYSTEM", f"Could not patch CallbackQuery methods: {_e}")
+
+    log_info("SYSTEM", "FloodWait safety interceptor installed.")
+
+
+_install_floodwait_interceptor()
 client.parse_mode = 'html'
 
 @client.on(events.NewMessage(incoming=True))
